@@ -20,6 +20,8 @@ public sealed class NodeOptions
     /// <summary>grpc | http. En este bloque solo existe http; grpc llegara despues.</summary>
     public string Transport { get; set; } = "http";
 
+    public string PspUrl { get; set; } = "http://psp-mock:8080";
+
     public static IReadOnlyList<string> ParsePeers(string? raw) =>
         string.IsNullOrWhiteSpace(raw)
             ? Array.Empty<string>()

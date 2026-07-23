@@ -50,6 +50,7 @@ builder.Services.AddSingleton<MembershipService>();
 // llegara cuando exista la segunda implementacion de IPeerTransport.
 builder.Services.AddHttpClient("gossip");
 builder.Services.AddSingleton<IPeerTransport, HttpPeerTransport>();
+builder.Services.AddSingleton<PeerReplicator>();
 
 builder.Services.AddHttpClient("psp", (sp, client) =>
 {
@@ -63,6 +64,7 @@ builder.Services.AddSingleton<PaymentProcessor>();
 
 builder.Services.AddHostedService<GossipBroadcaster>();
 builder.Services.AddHostedService<FailureDetector>();
+builder.Services.AddHostedService<TakeoverSupervisor>();
 
 var app = builder.Build();
 
@@ -74,13 +76,15 @@ app.MapGet("/health", (IOptions<NodeOptions> options) => Results.Ok(new
     uptime = Math.Round((DateTimeOffset.UtcNow - startedAt).TotalSeconds, 1)
 }));
 
-// Recepcion de gossip: el latido revive al peer y sus entradas convergen via merge.
-app.MapPost("/internal/gossip", (NodeDigest digest, MembershipService membership, ILedger ledger) =>
+// Recepcion de gossip: el latido revive al peer, sus entradas convergen via merge
+// y cada una alimenta el fencing (un epoch mayor cancela nuestro trabajo en vuelo).
+app.MapPost("/internal/gossip", (NodeDigest digest, MembershipService membership, ILedger ledger, PaymentProcessor processor) =>
 {
     membership.RecordHeartbeat(digest.NodeId);
     foreach (var entry in digest.Entries)
     {
         ledger.Apply(entry);
+        processor.ApplyFencing(entry);
     }
 
     return Results.NoContent();
@@ -104,7 +108,7 @@ app.MapPost("/pay", async (
     HttpRequest http,
     IOptions<NodeOptions> options,
     ILedger ledger,
-    IPeerTransport transport,
+    PeerReplicator replicator,
     PaymentProcessor processor,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -116,15 +120,10 @@ app.MapPost("/pay", async (
     var entry = new LedgerEntry(txId, TxState.Received, self, 1, body.Amount, null);
     ledger.Apply(entry);
 
-    var peers = options.Value.Peers;
-    if (peers.Count > 0)
+    if (options.Value.Peers.Count > 0)
     {
         // Replica sincrona: nunca aceptamos trabajo que solo existe en un nodo.
-        var digest = new NodeDigest(self, new[] { entry });
-        var outcomes = await Task.WhenAll(peers.Select(async peer =>
-            (peer, ok: await transport.SendDigestAsync(peer, digest, ct))));
-        var acked = outcomes.Where(o => o.ok).Select(o => o.peer).ToList();
-
+        var acked = await replicator.ReplicateAsync(entry, ct);
         if (acked.Count == 0)
         {
             logger.LogWarning("{Tx} rechazada: ningún peer confirmó la réplica.", txId);

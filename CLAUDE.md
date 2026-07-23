@@ -129,7 +129,7 @@ Por variables de entorno, con Options pattern:
 
 ```
 NODE_ID=node-1
-PEERS=node-2:8081,node-3:8081
+PEERS=node-2,node-3
 PSP_URL=http://psp-mock:8080
 TRANSPORT=grpc          # grpc | http
 HEARTBEAT_MS=1000

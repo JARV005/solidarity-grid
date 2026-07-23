@@ -21,7 +21,7 @@ public class PaymentProcessorTests
         var transport = new RecordingTransport();
         var processor = BuildProcessor(ledger, transport, gateway, peers: "node-2");
 
-        await processor.ProcessAsync("TX-1", "COP", CancellationToken.None);
+        await processor.RunAsync("TX-1", "COP", takenOver: false, CancellationToken.None);
 
         Assert.True(ledger.TryGet("TX-1", out var entry));
         Assert.Equal(TxState.Completed, entry.State);
@@ -37,7 +37,7 @@ public class PaymentProcessorTests
     }
 
     [Fact]
-    public async Task Aborts_without_charging_when_the_work_is_cancelled_before_the_psp_call()
+    public async Task Aborts_without_charging_when_cancelled_before_the_psp_call()
     {
         var ledger = new InMemoryLedger();
         ledger.Apply(new LedgerEntry("TX-1", TxState.Received, "node-1", 1, 25000m, null));
@@ -49,16 +49,52 @@ public class PaymentProcessorTests
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => processor.ProcessAsync("TX-1", "COP", cts.Token));
+            () => processor.RunAsync("TX-1", "COP", takenOver: false, cts.Token));
 
         Assert.Equal(0, gateway.Calls);
+    }
+
+    [Fact]
+    public async Task Fencing_cancels_in_flight_work_superseded_by_a_higher_epoch()
+    {
+        var ledger = new InMemoryLedger();
+        ledger.Apply(new LedgerEntry("TX-1", TxState.Received, "node-1", 1, 25000m, null));
+
+        var gateway = new BlockingGateway();
+        var processor = BuildProcessor(ledger, new RecordingTransport(), gateway, peers: "node-2");
+
+        // Dueño original (epoch 1) empieza a cobrar y se queda esperando al PSP.
+        processor.Begin("TX-1", "COP");
+        await gateway.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(processor.IsProcessing("TX-1"));
+
+        // Llega por gossip un relevo con epoch 2: el fencing debe cancelar el trabajo.
+        processor.ApplyFencing(new LedgerEntry("TX-1", TxState.Processing, "node-2", 2, 25000m, null));
+
+        await WaitUntilAsync(() => !processor.IsProcessing("TX-1"), TimeSpan.FromSeconds(5));
+        Assert.False(processor.IsProcessing("TX-1"));
+
+        // No completo: abandono el trabajo al descubrir que ya no era el dueño.
+        Assert.True(ledger.TryGet("TX-1", out var entry));
+        Assert.NotEqual(TxState.Completed, entry.State);
+        Assert.Null(entry.AuthCode);
     }
 
     private static PaymentProcessor BuildProcessor(
         InMemoryLedger ledger, IPeerTransport transport, IPaymentGateway gateway, params string[] peers)
     {
         var options = Options.Create(new NodeOptions { NodeId = "node-1", Peers = peers });
-        return new PaymentProcessor(ledger, transport, gateway, options, NullLogger<PaymentProcessor>.Instance);
+        var replicator = new PeerReplicator(transport, options);
+        return new PaymentProcessor(ledger, gateway, replicator, NullLogger<PaymentProcessor>.Instance);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
     }
 
     private sealed class FakeGateway : IPaymentGateway
@@ -73,6 +109,18 @@ public class PaymentProcessorTests
             ct.ThrowIfCancellationRequested();
             Interlocked.Increment(ref Calls);
             return Task.FromResult(new PaymentResult(_authCode, Replayed: false));
+        }
+    }
+
+    private sealed class BlockingGateway : IPaymentGateway
+    {
+        public readonly TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<PaymentResult> ChargeAsync(string txId, decimal amount, string currency, CancellationToken ct)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.Infinite, ct); // se libera solo al cancelar (fencing)
+            return new PaymentResult("AUTH-NEVER", Replayed: false);
         }
     }
 

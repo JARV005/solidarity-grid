@@ -24,8 +24,12 @@ services:
       dockerfile: src/SolidarityGrid.Node/Dockerfile
     environment:
       NODE_ID: node-1
-      PEERS: node-2:8081,node-3:8081
+      PEERS: node-2,node-3
       PSP_URL: http://psp-mock:8080
+      TRANSPORT: http
+      HEARTBEAT_MS: 1000
+      SUSPECT_MS: 3000
+      DEAD_MS: 5000
     ports:
       - "8080:8080"
     depends_on:
@@ -39,8 +43,12 @@ services:
     image: solidaritygrid-node
     environment:
       NODE_ID: node-2
-      PEERS: node-1:8081,node-3:8081
+      PEERS: node-1,node-3
       PSP_URL: http://psp-mock:8080
+      TRANSPORT: http
+      HEARTBEAT_MS: 1000
+      SUSPECT_MS: 3000
+      DEAD_MS: 5000
     ports:
       - "8082:8080"
     depends_on:
@@ -54,8 +62,12 @@ services:
     image: solidaritygrid-node
     environment:
       NODE_ID: node-3
-      PEERS: node-1:8081,node-2:8081
+      PEERS: node-1,node-2
       PSP_URL: http://psp-mock:8080
+      TRANSPORT: http
+      HEARTBEAT_MS: 1000
+      SUSPECT_MS: 3000
+      DEAD_MS: 5000
     ports:
       - "8083:8080"
     depends_on:

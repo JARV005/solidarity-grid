@@ -8,8 +8,17 @@ public sealed class NodeOptions
 {
     public string NodeId { get; set; } = "node-unknown";
 
-    /// <summary>Direcciones "host:puerto" de los peers, tal como llegan en PEERS.</summary>
+    /// <summary>Hostnames de los peers (uno = un nodeId). El transporte les pone el puerto.</summary>
     public IReadOnlyList<string> Peers { get; set; } = Array.Empty<string>();
+
+    public int HeartbeatMs { get; set; } = 1000;
+
+    public int SuspectMs { get; set; } = 3000;
+
+    public int DeadMs { get; set; } = 5000;
+
+    /// <summary>grpc | http. En este bloque solo existe http; grpc llegara despues.</summary>
+    public string Transport { get; set; } = "http";
 
     public static IReadOnlyList<string> ParsePeers(string? raw) =>
         string.IsNullOrWhiteSpace(raw)

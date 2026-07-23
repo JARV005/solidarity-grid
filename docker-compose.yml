@@ -1,0 +1,66 @@
+# Cuatro contenedores. Los tres nodos comparten UNA sola imagen
+# (solidaritygrid-node, construida por node-1) y se diferencian solo por
+# variables de entorno. El PSP es su propia imagen.
+
+x-node-healthcheck: &node-healthcheck
+  test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+  interval: 5s
+  timeout: 3s
+  retries: 5
+  start_period: 10s
+
+services:
+  psp-mock:
+    image: solidaritygrid-psp
+    build:
+      context: .
+      dockerfile: src/SolidarityGrid.Psp/Dockerfile
+    healthcheck: *node-healthcheck
+
+  node-1:
+    image: solidaritygrid-node
+    build:
+      context: .
+      dockerfile: src/SolidarityGrid.Node/Dockerfile
+    environment:
+      NODE_ID: node-1
+      PEERS: node-2:8081,node-3:8081
+      PSP_URL: http://psp-mock:8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      psp-mock:
+        condition: service_healthy
+    healthcheck: *node-healthcheck
+
+  # node-2 y node-3 reutilizan la imagen que construye node-1: no vuelven a
+  # declarar build, solo la referencian por nombre.
+  node-2:
+    image: solidaritygrid-node
+    environment:
+      NODE_ID: node-2
+      PEERS: node-1:8081,node-3:8081
+      PSP_URL: http://psp-mock:8080
+    ports:
+      - "8082:8080"
+    depends_on:
+      psp-mock:
+        condition: service_healthy
+      node-1:
+        condition: service_started
+    healthcheck: *node-healthcheck
+
+  node-3:
+    image: solidaritygrid-node
+    environment:
+      NODE_ID: node-3
+      PEERS: node-1:8081,node-2:8081
+      PSP_URL: http://psp-mock:8080
+    ports:
+      - "8083:8080"
+    depends_on:
+      psp-mock:
+        condition: service_healthy
+      node-1:
+        condition: service_started
+    healthcheck: *node-healthcheck

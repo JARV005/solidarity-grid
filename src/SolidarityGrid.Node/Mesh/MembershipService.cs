@@ -116,6 +116,29 @@ public sealed class MembershipService
         }
     }
 
+    /// <summary>Un nodo esta caido si esta rastreado y su lease expiro (contra el reloj local).</summary>
+    public bool IsDead(string nodeId)
+    {
+        lock (_gate)
+        {
+            return _peers.TryGetValue(nodeId, out var peer)
+                   && Classify(_clock.GetUtcNow() - peer.LastSeenAt) == MembershipState.Dead;
+        }
+    }
+
+    /// <summary>Peers que NO estan caidos (Alive o Suspect). No incluye a este nodo.</summary>
+    public IReadOnlyList<string> LivePeers()
+    {
+        lock (_gate)
+        {
+            var now = _clock.GetUtcNow();
+            return _peers.Values
+                .Where(peer => Classify(now - peer.LastSeenAt) != MembershipState.Dead)
+                .Select(peer => peer.NodeId)
+                .ToList();
+        }
+    }
+
     private MembershipState Classify(TimeSpan elapsed) =>
         elapsed >= _deadAfter ? MembershipState.Dead
         : elapsed >= _suspectAfter ? MembershipState.Suspect

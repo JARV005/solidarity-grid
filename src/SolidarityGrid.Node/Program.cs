@@ -160,7 +160,7 @@ app.MapGet("/tx/{txId}", (string txId, ILedger ledger) =>
 var nodeOptions = app.Services.GetRequiredService<IOptions<NodeOptions>>().Value;
 var log = app.Services.GetRequiredService<ILogger<Program>>();
 log.LogInformation(
-    "Nodo en linea. REST en :8080, gRPC en :8081. Peers configurados: {Peers}.",
+    "Nodo en linea. REST en :8080, HTTP/2 en :8081 (sin servicios gRPC). Peers configurados: {Peers}.",
     nodeOptions.Peers.Count == 0 ? "ninguno" : string.Join(", ", nodeOptions.Peers));
 
 app.Run();

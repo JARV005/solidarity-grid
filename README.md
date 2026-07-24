@@ -15,7 +15,7 @@ más de una.
 
 ## 2. Cómo correrlo
 
-Prerrequisitos: Docker con `docker compose` v2. El script de demostración necesita además un shell con `bash` y `curl` (Git Bash en Windows, o cualquier Linux/macOS); no usa `jq`. Para correr los tests fuera de Docker hace falta el SDK de .NET 8, que el repositorio fija con `global.json`.
+Prerrequisitos: Docker con `docker compose` v2. Los comandos de `docker` funcionan en cualquier terminal, pero los ejemplos de `curl` y el script de demostración están escritos para un shell `bash` (en Windows, Git Bash; en Linux o macOS, el shell del sistema); no usan `jq`. Para correr los tests fuera de Docker hace falta el SDK de .NET 8, que el repositorio fija con `global.json`.
 
 ### Levantar el clúster
 
@@ -47,10 +47,10 @@ docker compose exec psp-mock curl -s http://localhost:8080/charges/TX-1
 ### La simulación de fallo
 
 ```
-./scripts/demo.sh
+bash scripts/demo.sh
 ```
 
-Si el bit de ejecución no viajó con el checkout, `bash scripts/demo.sh` funciona igual. El script recorre siete fases narradas. Levanta el clúster, envía un pago a node-1, y tres segundos después mata node-1 con `SIGKILL`. Luego sigue en vivo los logs de los supervivientes durante unos quince segundos, mientras uno de ellos detecta la caída y asume la transacción. Al final consulta ambos supervivientes, muestra que convergen al mismo código de autorización y que el adquirente registró `attempts:2, applied:1`, resucita node-1 y comprueba que converge al resultado ajeno sin volver a cobrar. Deja el clúster en pie para inspección.
+Se invoca con `bash` explícito para que funcione igual en Git Bash y en Unix. En sistemas Unix, con el bit de ejecución puesto, `./scripts/demo.sh` es equivalente. El script recorre siete fases narradas. Levanta el clúster, envía un pago a node-1, y tres segundos después mata node-1 con `SIGKILL`. Luego sigue en vivo los logs de los supervivientes durante unos quince segundos, mientras uno de ellos detecta la caída y asume la transacción. Al final consulta ambos supervivientes, muestra que convergen al mismo código de autorización y que el adquirente registró `attempts:2, applied:1`, resucita node-1 y comprueba que converge al resultado ajeno sin volver a cobrar. Deja el clúster en pie para inspección.
 
 ### Bajar el clúster
 

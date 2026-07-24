@@ -46,3 +46,6 @@ artifacts/
 # OS
 .DS_Store
 Thumbs.db
+
+# Material de estudio personal, no es parte de la entrega
+docs/walkthrough.md

@@ -23,9 +23,9 @@ Prerrequisitos: Docker con `docker compose` v2. El script de demostración neces
 docker compose up --build
 ```
 
-Se construyen dos imágenes (una para los nodos, otra para el adquirente) y arrancan cuatro contenedores hasta quedar `healthy`. Cada nodo escribe al arrancar una línea como `[node-1] Nodo en linea. REST en :8080, gRPC en :8081.`. Los tres nodos publican su API REST en el host: node-1 en `8080`, node-2 en `8082`, node-3 en `8083`. El contenedor `psp-mock` no publica puerto; vive solo en la red interna del compose.
+Se construyen dos imágenes (una para los nodos, otra para el adquirente) y arrancan cuatro contenedores hasta quedar `healthy`. Cada nodo escribe al arrancar una línea como `[node-1] Nodo en linea. REST en :8080, HTTP/2 en :8081 (sin servicios gRPC).`. Los tres nodos publican su API REST en el host: node-1 en `8080`, node-2 en `8082`, node-3 en `8083` (el salto a `8081` no es un hueco: ese puerto lo ocupa el endpoint HTTP/2 de node-1 dentro de su contenedor, y no se publica). El contenedor `psp-mock` no publica puerto; vive solo en la red interna del compose.
 
-Con el clúster arriba:
+El comando anterior queda en primer plano volcando los logs de los cuatro contenedores, que es parte de lo que interesa observar. Los siguientes `curl` van en una segunda terminal, con el clúster arriba:
 
 ```
 # Aceptar un pago en node-1: responde 202 en milisegundos, sin esperar al banco.
@@ -50,7 +50,13 @@ docker compose exec psp-mock curl -s http://localhost:8080/charges/TX-1
 ./scripts/demo.sh
 ```
 
-El script recorre siete fases narradas. Levanta el clúster, envía un pago a node-1, y tres segundos después mata node-1 con `SIGKILL`. Luego sigue en vivo los logs de los supervivientes durante unos quince segundos, mientras uno de ellos detecta la caída y asume la transacción. Al final consulta ambos supervivientes, muestra que convergen al mismo código de autorización y que el adquirente registró `attempts:2, applied:1`, resucita node-1 y comprueba que converge al resultado ajeno sin volver a cobrar. Deja el clúster en pie para inspección.
+Si el bit de ejecución no viajó con el checkout, `bash scripts/demo.sh` funciona igual. El script recorre siete fases narradas. Levanta el clúster, envía un pago a node-1, y tres segundos después mata node-1 con `SIGKILL`. Luego sigue en vivo los logs de los supervivientes durante unos quince segundos, mientras uno de ellos detecta la caída y asume la transacción. Al final consulta ambos supervivientes, muestra que convergen al mismo código de autorización y que el adquirente registró `attempts:2, applied:1`, resucita node-1 y comprueba que converge al resultado ajeno sin volver a cobrar. Deja el clúster en pie para inspección.
+
+### Bajar el clúster
+
+```
+docker compose down -v
+```
 
 ## 3. Arquitectura
 
@@ -145,13 +151,13 @@ sequenceDiagram
   N1->>P: POST /charge (attempts=1)
   Note over N1: muere en t=3s (SIGKILL)
   Note over N2,N3: sin latido de node-1
-  N2->>N2: t=5s node-1 marcado Dead
-  N3->>N3: t=5s node-1 marcado Dead
+  N2->>N2: t=8s node-1 marcado Dead
+  N3->>N3: t=8s node-1 marcado Dead
   N2->>N2: HRW: soy el sucesor
   N3->>N3: HRW: el sucesor es node-2, sin acción
   N2->>N3: replica (Processing, epoch 2)
   N2->>P: POST /charge misma clave (attempts=2)
-  P-->>N2: replayed, authCode cacheado
+  P-->>N2: se engancha al cobro en curso, un solo authCode
   N2->>N3: replica (Completed)
 ```
 
@@ -159,13 +165,13 @@ La línea de tiempo, con los plazos que están en el código:
 
 En el segundo 0 llega el pago a node-1, que lo replica a sus dos peers antes de responder `202` y arranca el cobro contra el adquirente, que dormirá entre 5 y 10 segundos. Durante los primeros tres segundos node-1 sigue emitiendo latidos con normalidad. En el segundo 3 muere de golpe; su llamada al adquirente se corta, pero el adquirente es otro contenedor y sigue con lo suyo. A partir de ahí node-2 y node-3 dejan de recibir latidos. Sobre el segundo 6, tres segundos sin noticias, ambos marcan a node-1 como `Suspect`. Sobre el segundo 8, cinco segundos sin noticias, lo marcan como `Dead`.
 
-En ese momento los dos supervivientes escanean el ledger y ven la transacción huérfana. Ambos calculan el mismo hash de rendezvous; supongamos que gana node-2. node-3 registra en Debug que el sucesor es node-2 y no hace nada: esa decisión de no actuar es precisamente lo que demuestra que la elección funcionó, porque los dos llegaron a la misma conclusión por separado. node-2 incrementa el epoch, se pone como dueño, propaga el cambio y llama al adquirente con la misma clave de idempotencia. El adquirente ya había aplicado el cobro, así que devuelve el resultado cacheado. node-2 completa la transacción y la propaga; node-3 converge por merge. Cuando node-1 resucita, recibe el `Completed` ajeno por gossip y lo adopta sin volver a cobrar.
+En ese momento los dos supervivientes escanean el ledger y ven la transacción huérfana. Ambos calculan el mismo hash de rendezvous; supongamos que gana node-2. node-3 registra en Debug que el sucesor es node-2 y no hace nada: esa decisión de no actuar es precisamente lo que demuestra que la elección funcionó, porque los dos llegaron a la misma conclusión por separado. node-2 incrementa el epoch, se pone como dueño, propaga el cambio y llama al adquirente con la misma clave de idempotencia. Como el adquirente duerme entre 5 y 10 segundos y el relevo ocurre sobre el segundo 8, lo más probable es que el cobro original de node-1 siga en vuelo: la segunda solicitud no lanza otro cobro, se engancha a la misma ejecución en curso y espera su resultado. Si el cobro ya hubiera terminado, recibiría el resultado ya registrado. En ambos casos hay un solo cobro. node-2 completa la transacción y la propaga; node-3 converge por merge. Cuando node-1 resucita, recibe el `Completed` ajeno por gossip y lo adopta sin volver a cobrar.
 
 ## 6. attempts vs applied
 
 El adquirente lleva dos contadores por clave: `attempts`, cuántas veces se pidió el cobro, y `applied`, cuántas veces se cobró de verdad. Tras el fallo, la demostración muestra `attempts:2, applied:1`.
 
-El segundo intento no es un defecto que disculpar; es obligatorio. El nodo que releva no tenía forma de saber si el cobro original había llegado al adquirente antes de que su dueño muriera. Esta es una **transacción en duda**: el cobro se ejecutó, pero el nodo que lo pidió desapareció antes de conocer el resultado. La única manera de resolverla es volver a preguntar, y la clave de idempotencia es lo que hace que preguntar de nuevo no cobre de nuevo.
+El segundo intento no es un defecto que disculpar; es obligatorio. El nodo que releva no tenía forma de saber si el cobro original había llegado al adquirente antes de que su dueño muriera. Esta es una **transacción en duda**: el cobro se ejecutó, pero el nodo que lo pidió desapareció antes de conocer el resultado. La única manera de resolverla es volver a preguntar, y la clave de idempotencia es lo que hace que preguntar de nuevo no cobre de nuevo. El adquirente guarda una sola ejecución por clave: si la primera sigue en curso cuando llega la segunda solicitud, esta se engancha a ella y espera su resultado; si ya terminó, recibe el resultado registrado. En ninguno de los dos casos se cobra dos veces.
 
 La formulación es esta: ejecución **at-least-once** (reintentamos hasta que alguien termina) más un sink idempotente (el adquirente, que colapsa los reintentos de una misma clave en un solo cobro) da un efecto **exactly-once**. El `attempts:2` es la afirmación honesta de que hubo dos intentos; el `applied:1` es la garantía de que hubo un solo cobro.
 
